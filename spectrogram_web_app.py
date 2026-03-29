@@ -12,7 +12,6 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
-from matplotlib.colors import BoundaryNorm, ListedColormap, LogNorm
 
 
 THIRD_OCTAVE_BANDS = np.array([
@@ -366,6 +365,14 @@ def add_plot_trace(fig, row, times, freqs, matrix_mm_s, low_label, high_label, b
 
     z = np.array(matrix_mm_s, dtype=float)
 
+    custom_text = np.empty(z.shape, dtype=object)
+    for r in range(z.shape[0]):
+        for c in range(z.shape[1]):
+            if np.isfinite(z[r, c]):
+                custom_text[r, c] = bounding_vc_curves(z[r, c])
+            else:
+                custom_text[r, c] = "No data"
+
     fig.add_trace(
         go.Heatmap(
             x=times,
@@ -375,16 +382,14 @@ def add_plot_trace(fig, row, times, freqs, matrix_mm_s, low_label, high_label, b
             zmax=vmax,
             colorscale=colorscale,
             zsmooth=False,
+            connectgaps=False,
             hovertemplate=(
-                "%{customdata[0]|%d/%m/%Y %H:%M:%S}<br>"
+                "%{x|%d/%m/%Y %H:%M:%S}<br>"
                 "%{y:.4g} Hz<br>"
                 "%{z:.6g} mm/s<br>"
-                "%{customdata[1]}<extra></extra>"
+                "%{text}<extra></extra>"
             ),
-            customdata=np.dstack([
-                np.tile(np.array(times, dtype="datetime64[ns]"), (len(freqs), 1)),
-                np.vectorize(bounding_vc_curves, otypes=[object])(z)
-            ]),
+            text=custom_text,
             colorbar=dict(
                 tickmode="array",
                 tickvals=vc_boundaries.tolist(),
@@ -401,7 +406,17 @@ def add_plot_trace(fig, row, times, freqs, matrix_mm_s, low_label, high_label, b
 
     fig.update_yaxes(type="log", row=row, col=1, title_text="Frequency (Hz, 1/3 octave)")
     fig.update_xaxes(row=row, col=1)
-    fig.layout.annotations[row - 1].text = f"{location} - {axis_label}"
+
+    fig.add_annotation(
+        text=f"{location} - {axis_label}",
+        x=0.5,
+        y=1.0,
+        xref=f"x{row} domain" if row > 1 else "x domain",
+        yref=f"y{row} domain" if row > 1 else "y domain",
+        xanchor="center",
+        yanchor="bottom",
+        showarrow=False
+    )
 
 
 def apply_dynamic_freq_ticks_to_fig(fig, plot_count):
@@ -529,7 +544,6 @@ if uploaded is not None:
             cols=1,
             shared_xaxes=True,
             vertical_spacing=0.04,
-            subplot_titles=[""] * st.session_state.plot_count,
         )
 
         for i in range(st.session_state.plot_count):
@@ -555,7 +569,14 @@ if uploaded is not None:
             )
 
             if matrix is None:
-                fig.add_annotation(text="No data", x=0.5, y=0.5, xref=f"x{i+1} domain", yref=f"y{i+1} domain", showarrow=False)
+                fig.add_annotation(
+                    text="No data",
+                    x=0.5,
+                    y=0.5,
+                    xref=f"x{i+1} domain" if i > 0 else "x domain",
+                    yref=f"y{i+1} domain" if i > 0 else "y domain",
+                    showarrow=False
+                )
                 continue
 
             add_plot_trace(
