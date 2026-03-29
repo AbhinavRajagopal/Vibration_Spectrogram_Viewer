@@ -3,6 +3,7 @@ import io
 import math
 import tempfile
 from pathlib import Path
+from datetime import datetime, time
 
 import duckdb
 import numpy as np
@@ -418,8 +419,8 @@ if "plot_count" not in st.session_state:
     st.session_state.plot_count = 3
 if "plot_cfg" not in st.session_state:
     st.session_state.plot_cfg = []
-if "plot_requested" not in st.session_state:
-    st.session_state.plot_requested = False
+if "plot_result" not in st.session_state:
+    st.session_state.plot_result = None
 
 if uploaded is not None:
     with st.spinner("Loading and caching file..."):
@@ -434,35 +435,13 @@ if uploaded is not None:
 
     st.success(f"Loaded {meta['rows']} rows. Range: {dt_min.strftime('%d/%m/%Y %H:%M:%S')} to {dt_max.strftime('%d/%m/%Y %H:%M:%S')}")
 
-    c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.2, 1.4, 1.2, 1.0, 1.0])
-    with c1:
-        start_date = st.date_input("Start date", value=dt_min.date(), format="DD/MM/YYYY")
-    with c2:
-        start_time = st.time_input("Start time", value=dt_min.to_pydatetime().time().replace(second=0, microsecond=0), step=60)
-    with c3:
-        end_date = st.date_input("End date", value=dt_max.date(), format="DD/MM/YYYY")
-    with c4:
-        end_time = st.time_input("End time", value=dt_max.to_pydatetime().time().replace(second=0, microsecond=0), step=60)
-    with c5:
-        fixed_scale = st.checkbox("Fix colour scale", value=False)
-    with c6:
-        banded_vc = st.checkbox("Banded VC classes", value=True)
-
-    gc1, gc2, gc3, gc4, gc5 = st.columns([1, 1, 1, 1, 1])
-    with gc1:
+    add_col, remove_col = st.columns(2)
+    with add_col:
         if st.button("Add plot"):
             st.session_state.plot_count = min(MAX_PLOTS, st.session_state.plot_count + 1)
-    with gc2:
+    with remove_col:
         if st.button("Remove plot"):
             st.session_state.plot_count = max(1, st.session_state.plot_count - 1)
-    with gc3:
-        global_low = st.selectbox("Global Low VC", VC_LABELS, index=VC_LABELS.index("VC-K"), disabled=not fixed_scale)
-    with gc4:
-        global_high = st.selectbox("Global High VC", VC_LABELS, index=VC_LABELS.index("Op Rooms"), disabled=not fixed_scale)
-    with gc5:
-        plot_now = st.button("Plot", type="primary")
-        if plot_now:
-            st.session_state.plot_requested = True
 
     while len(st.session_state.plot_cfg) < st.session_state.plot_count:
         defaults = ["x", "y", "z", "Vsum(x,y,z)", "max(x,y,z)", "x"]
@@ -477,151 +456,186 @@ if uploaded is not None:
 
     axis_options = ["x", "y", "z", "Vsum(x,y,z)", "max(x,y,z)"]
 
-    for i in range(st.session_state.plot_count):
-        st.markdown(f"**Plot {i+1}**")
-        pc1, pc2, pc3, pc4 = st.columns([2.5, 1.2, 1.1, 1.1])
-        with pc1:
-            loc = st.selectbox(
-                f"Location {i+1}", locations,
-                index=locations.index(st.session_state.plot_cfg[i]["location"]) if st.session_state.plot_cfg[i]["location"] in locations else 0,
-                key=f"loc_{i}"
-            )
-        with pc2:
-            axis = st.selectbox(
-                f"Axis {i+1}", axis_options,
-                index=axis_options.index(st.session_state.plot_cfg[i]["axis"]) if st.session_state.plot_cfg[i]["axis"] in axis_options else 0,
-                key=f"axis_{i}"
-            )
-        with pc3:
-            low_vc = st.selectbox(
-                f"Low VC {i+1}", VC_LABELS,
-                index=VC_LABELS.index(st.session_state.plot_cfg[i]["low_vc"]) if st.session_state.plot_cfg[i]["low_vc"] in VC_LABELS else VC_LABELS.index("VC-K"),
-                disabled=fixed_scale,
-                key=f"low_{i}"
-            )
-        with pc4:
-            high_vc = st.selectbox(
-                f"High VC {i+1}", VC_LABELS,
-                index=VC_LABELS.index(st.session_state.plot_cfg[i]["high_vc"]) if st.session_state.plot_cfg[i]["high_vc"] in VC_LABELS else VC_LABELS.index("Op Rooms"),
-                disabled=fixed_scale,
-                key=f"high_{i}"
-            )
+    with st.form("plot_form"):
+        c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.2, 1.4, 1.2, 1.0, 1.0])
+        with c1:
+            start_date = st.date_input("Start date", value=dt_min.date(), format="DD/MM/YYYY")
+        with c2:
+            start_time = st.time_input("Start time", value=dt_min.to_pydatetime().time().replace(second=0, microsecond=0), step=60)
+        with c3:
+            end_date = st.date_input("End date", value=dt_max.date(), format="DD/MM/YYYY")
+        with c4:
+            end_time = st.time_input("End time", value=dt_max.to_pydatetime().time().replace(second=0, microsecond=0), step=60)
+        with c5:
+            fixed_scale = st.checkbox("Fix colour scale", value=False)
+        with c6:
+            banded_vc = st.checkbox("Banded VC classes", value=True)
 
-        st.session_state.plot_cfg[i] = {
-            "location": loc,
-            "axis": axis,
-            "low_vc": low_vc,
-            "high_vc": high_vc,
-        }
-
-    start = pd.Timestamp.combine(pd.Timestamp(start_date).date(), start_time)
-    end = pd.Timestamp.combine(pd.Timestamp(end_date).date(), end_time)
-
-    if end < start:
-        st.error("End time must be after start time.")
-    elif st.session_state.plot_requested:
-        selected_window_df = build_selected_window_df(parquet_path, start, end)
-        master_times = make_master_time_index(selected_window_df, start, end)
-
-        fig = make_subplots(
-            rows=st.session_state.plot_count,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.04,
-        )
-
-        any_plot = False
+        gc1, gc2 = st.columns(2)
+        with gc1:
+            global_low = st.selectbox("Global Low VC", VC_LABELS, index=VC_LABELS.index("VC-K"), disabled=not fixed_scale)
+        with gc2:
+            global_high = st.selectbox("Global High VC", VC_LABELS, index=VC_LABELS.index("Op Rooms"), disabled=not fixed_scale)
 
         for i in range(st.session_state.plot_count):
-            cfg = st.session_state.plot_cfg[i]
-            low_label = global_low if fixed_scale else cfg["low_vc"]
-            high_label = global_high if fixed_scale else cfg["high_vc"]
-
-            try:
-                _ = build_vc_boundaries(low_label, high_label)
-            except ValueError as e:
-                st.error(str(e))
-                st.stop()
-
-            times, freqs, matrix = prepare_matrix_fast(
-                parquet_path,
-                freq_cols,
-                freq_map,
-                cfg["location"],
-                axis_to_internal(cfg["axis"]),
-                start,
-                end,
-                master_times,
-            )
-
-            if matrix is None:
-                fig.add_annotation(
-                    text="No data",
-                    x=0.5,
-                    y=0.5,
-                    xref=f"x{i+1} domain" if i > 0 else "x domain",
-                    yref=f"y{i+1} domain" if i > 0 else "y domain",
-                    showarrow=False
+            st.markdown(f"**Plot {i+1}**")
+            pc1, pc2, pc3, pc4 = st.columns([2.5, 1.2, 1.1, 1.1])
+            with pc1:
+                loc = st.selectbox(
+                    f"Location {i+1}", locations,
+                    index=locations.index(st.session_state.plot_cfg[i]["location"]) if st.session_state.plot_cfg[i]["location"] in locations else 0,
+                    key=f"loc_{i}"
                 )
-                continue
+            with pc2:
+                axis = st.selectbox(
+                    f"Axis {i+1}", axis_options,
+                    index=axis_options.index(st.session_state.plot_cfg[i]["axis"]) if st.session_state.plot_cfg[i]["axis"] in axis_options else 0,
+                    key=f"axis_{i}"
+                )
+            with pc3:
+                low_vc = st.selectbox(
+                    f"Low VC {i+1}", VC_LABELS,
+                    index=VC_LABELS.index(st.session_state.plot_cfg[i]["low_vc"]) if st.session_state.plot_cfg[i]["low_vc"] in VC_LABELS else VC_LABELS.index("VC-K"),
+                    disabled=fixed_scale,
+                    key=f"low_{i}"
+                )
+            with pc4:
+                high_vc = st.selectbox(
+                    f"High VC {i+1}", VC_LABELS,
+                    index=VC_LABELS.index(st.session_state.plot_cfg[i]["high_vc"]) if st.session_state.plot_cfg[i]["high_vc"] in VC_LABELS else VC_LABELS.index("Op Rooms"),
+                    disabled=fixed_scale,
+                    key=f"high_{i}"
+                )
 
-            if np.isfinite(matrix).any():
-                any_plot = True
+            st.session_state.plot_cfg[i] = {
+                "location": loc,
+                "axis": axis,
+                "low_vc": low_vc,
+                "high_vc": high_vc,
+            }
 
-            add_plot_trace(
-                fig, i + 1, times, freqs, matrix,
-                low_label, high_label, banded_vc,
-                cfg["location"], cfg["axis"],
-                1.02 + (i * 0.02)
+        plot_now = st.form_submit_button("Plot", type="primary")
+
+    if plot_now:
+        start = pd.Timestamp.combine(pd.Timestamp(start_date).date(), start_time)
+        end = pd.Timestamp.combine(pd.Timestamp(end_date).date(), end_time)
+
+        if end < start:
+            st.error("End time must be after start time.")
+        else:
+            selected_window_df = build_selected_window_df(parquet_path, start, end)
+            master_times = make_master_time_index(selected_window_df, start, end)
+
+            fig = make_subplots(
+                rows=st.session_state.plot_count,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.04,
             )
 
-        fig.update_layout(
-            height=max(350, 300 * st.session_state.plot_count),
-            margin=dict(l=60, r=250, t=40, b=40)
-        )
+            any_plot = False
 
-        if len(master_times) > 0:
-            fig.update_xaxes(range=[master_times[0], master_times[-1]])
+            for i in range(st.session_state.plot_count):
+                cfg = st.session_state.plot_cfg[i]
+                low_label = global_low if fixed_scale else cfg["low_vc"]
+                high_label = global_high if fixed_scale else cfg["high_vc"]
 
-        apply_dynamic_freq_ticks_to_fig(fig, st.session_state.plot_count)
+                try:
+                    _ = build_vc_boundaries(low_label, high_label)
+                except ValueError as e:
+                    st.error(str(e))
+                    st.stop()
 
-        if any_plot:
-            st.plotly_chart(fig, use_container_width=True)
+                times, freqs, matrix = prepare_matrix_fast(
+                    parquet_path,
+                    freq_cols,
+                    freq_map,
+                    cfg["location"],
+                    axis_to_internal(cfg["axis"]),
+                    start,
+                    end,
+                    master_times,
+                )
+
+                if matrix is None:
+                    fig.add_annotation(
+                        text="No data",
+                        x=0.5,
+                        y=0.5,
+                        xref=f"x{i+1} domain" if i > 0 else "x domain",
+                        yref=f"y{i+1} domain" if i > 0 else "y domain",
+                        showarrow=False
+                    )
+                    continue
+
+                if np.isfinite(matrix).any():
+                    any_plot = True
+
+                add_plot_trace(
+                    fig, i + 1, times, freqs, matrix,
+                    low_label, high_label, banded_vc,
+                    cfg["location"], cfg["axis"],
+                    1.02 + (i * 0.02)
+                )
+
+            fig.update_layout(
+                height=max(350, 300 * st.session_state.plot_count),
+                margin=dict(l=60, r=250, t=40, b=40)
+            )
+
+            if len(master_times) > 0:
+                fig.update_xaxes(range=[master_times[0], master_times[-1]])
+
+            apply_dynamic_freq_ticks_to_fig(fig, st.session_state.plot_count)
+
+            export_parts = []
+            for i in range(st.session_state.plot_count):
+                cfg = st.session_state.plot_cfg[i]
+                df_sel = fast_filter_parquet(parquet_path, cfg["location"], start, end)
+                if df_sel.empty:
+                    continue
+                internal_axis = axis_to_internal(cfg["axis"])
+                if internal_axis == "vsum(x,y,z)":
+                    df_sel = energetic_sum(df_sel, freq_cols)
+                elif internal_axis == "max(x,y,z)":
+                    df_sel = axis_maximum(df_sel, freq_cols)
+                else:
+                    df_sel = df_sel[df_sel["axis"] == internal_axis].copy()
+                if df_sel.empty:
+                    continue
+                df_sel.insert(0, "plot", f"Plot {i+1}")
+                df_sel.insert(1, "selected_axis", cfg["axis"])
+                export_parts.append(df_sel)
+
+            export_df = None
+            if export_parts:
+                export_df = pd.concat(export_parts, ignore_index=True)
+                if "datetime" in export_df.columns:
+                    export_df = export_df.sort_values(["plot", "location", "datetime"]).drop(columns=["datetime"])
+
+            st.session_state.plot_result = {
+                "fig": fig,
+                "any_plot": any_plot,
+                "export_df": export_df,
+            }
+
+    plot_result = st.session_state.plot_result
+    if plot_result is not None:
+        if plot_result["any_plot"]:
+            st.plotly_chart(plot_result["fig"], use_container_width=True)
         else:
             st.warning("No plotted data found for the current selections.")
 
         ec1, ec2 = st.columns(2)
         with ec1:
-            png_bytes = fig.to_image(format="png")
+            png_bytes = plot_result["fig"].to_image(format="png")
             st.download_button("Export plots PNG", png_bytes, file_name="spectrogram_plots.png", mime="image/png")
         with ec2:
-            pdf_bytes = fig.to_image(format="pdf")
+            pdf_bytes = plot_result["fig"].to_image(format="pdf")
             st.download_button("Export plots PDF", pdf_bytes, file_name="spectrogram_plots.pdf", mime="application/pdf")
 
-        export_parts = []
-        for i in range(st.session_state.plot_count):
-            cfg = st.session_state.plot_cfg[i]
-            df_sel = fast_filter_parquet(parquet_path, cfg["location"], start, end)
-            if df_sel.empty:
-                continue
-            internal_axis = axis_to_internal(cfg["axis"])
-            if internal_axis == "vsum(x,y,z)":
-                df_sel = energetic_sum(df_sel, freq_cols)
-            elif internal_axis == "max(x,y,z)":
-                df_sel = axis_maximum(df_sel, freq_cols)
-            else:
-                df_sel = df_sel[df_sel["axis"] == internal_axis].copy()
-            if df_sel.empty:
-                continue
-            df_sel.insert(0, "plot", f"Plot {i+1}")
-            df_sel.insert(1, "selected_axis", cfg["axis"])
-            export_parts.append(df_sel)
-
-        if export_parts:
-            export_df = pd.concat(export_parts, ignore_index=True)
-            if "datetime" in export_df.columns:
-                export_df = export_df.sort_values(["plot", "location", "datetime"]).drop(columns=["datetime"])
-            csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+        if plot_result["export_df"] is not None and not plot_result["export_df"].empty:
+            csv_bytes = plot_result["export_df"].to_csv(index=False).encode("utf-8")
             st.download_button("Export window CSV", csv_bytes, file_name="selected_window.csv", mime="text/csv")
 else:
     st.info("Upload a CSV or TXT export to begin.")
