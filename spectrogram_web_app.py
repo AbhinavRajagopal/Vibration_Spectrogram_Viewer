@@ -39,10 +39,6 @@ NON_FREQ_COLS = {"location", "equipment", "date", "time", "axis", "datetime"}
 MAX_PLOTS = 6
 
 
-# ----------------------------
-# Utility helpers
-# ----------------------------
-
 def format_decimal(value: float) -> str:
     if value is None or not np.isfinite(value):
         return ""
@@ -235,10 +231,6 @@ def choose_freq_ticks(fig_height_px: int):
     return ticks
 
 
-# ----------------------------
-# Cached data loading
-# ----------------------------
-
 @st.cache_data(show_spinner=False)
 def load_uploaded_to_parquet_bytes(file_name: str, file_bytes: bytes):
     text = file_bytes.decode("utf-8-sig", errors="replace")
@@ -335,10 +327,6 @@ def build_selected_window_df(parquet_path: str, start, end):
     return df[(df["datetime"] >= start) & (df["datetime"] <= end)].copy()
 
 
-# ----------------------------
-# Plotting
-# ----------------------------
-
 def build_plotly_colorscale_from_mpl(boundaries):
     n_intervals = len(boundaries) - 1
     base = plt.cm.viridis(np.linspace(0.12, 0.95, n_intervals))
@@ -358,20 +346,14 @@ def add_plot_trace(fig, row, times, freqs, matrix_mm_s, low_label, high_label, b
     vmin = float(np.min(vc_boundaries))
     vmax = float(np.max(vc_boundaries))
 
-    if banded:
-        colorscale = build_plotly_colorscale_from_mpl(vc_boundaries)
-    else:
-        colorscale = "Viridis"
+    colorscale = build_plotly_colorscale_from_mpl(vc_boundaries) if banded else "Viridis"
 
     z = np.array(matrix_mm_s, dtype=float)
 
     custom_text = np.empty(z.shape, dtype=object)
     for r in range(z.shape[0]):
         for c in range(z.shape[1]):
-            if np.isfinite(z[r, c]):
-                custom_text[r, c] = bounding_vc_curves(z[r, c])
-            else:
-                custom_text[r, c] = "No data"
+            custom_text[r, c] = bounding_vc_curves(z[r, c]) if np.isfinite(z[r, c]) else "No data"
 
     fig.add_trace(
         go.Heatmap(
@@ -427,10 +409,6 @@ def apply_dynamic_freq_ticks_to_fig(fig, plot_count):
         fig.update_yaxes(tickmode="array", tickvals=ticks.tolist(), ticktext=ticktext, row=row, col=1)
 
 
-# ----------------------------
-# Streamlit app
-# ----------------------------
-
 st.set_page_config(page_title="Vibration Spectrogram Viewer", layout="wide")
 st.title("Vibration Spectrogram Viewer")
 
@@ -440,6 +418,8 @@ if "plot_count" not in st.session_state:
     st.session_state.plot_count = 3
 if "plot_cfg" not in st.session_state:
     st.session_state.plot_cfg = []
+if "plot_requested" not in st.session_state:
+    st.session_state.plot_requested = False
 
 if uploaded is not None:
     with st.spinner("Loading and caching file..."):
@@ -468,7 +448,7 @@ if uploaded is not None:
     with c6:
         banded_vc = st.checkbox("Banded VC classes", value=True)
 
-    gc1, gc2, gc3, gc4 = st.columns([1, 1, 1, 1])
+    gc1, gc2, gc3, gc4, gc5 = st.columns([1, 1, 1, 1, 1])
     with gc1:
         if st.button("Add plot"):
             st.session_state.plot_count = min(MAX_PLOTS, st.session_state.plot_count + 1)
@@ -479,6 +459,10 @@ if uploaded is not None:
         global_low = st.selectbox("Global Low VC", VC_LABELS, index=VC_LABELS.index("VC-K"), disabled=not fixed_scale)
     with gc4:
         global_high = st.selectbox("Global High VC", VC_LABELS, index=VC_LABELS.index("Op Rooms"), disabled=not fixed_scale)
+    with gc5:
+        plot_now = st.button("Plot", type="primary")
+        if plot_now:
+            st.session_state.plot_requested = True
 
     while len(st.session_state.plot_cfg) < st.session_state.plot_count:
         defaults = ["x", "y", "z", "Vsum(x,y,z)", "max(x,y,z)", "x"]
@@ -535,7 +519,7 @@ if uploaded is not None:
 
     if end < start:
         st.error("End time must be after start time.")
-    else:
+    elif st.session_state.plot_requested:
         selected_window_df = build_selected_window_df(parquet_path, start, end)
         master_times = make_master_time_index(selected_window_df, start, end)
 
@@ -545,6 +529,8 @@ if uploaded is not None:
             shared_xaxes=True,
             vertical_spacing=0.04,
         )
+
+        any_plot = False
 
         for i in range(st.session_state.plot_count):
             cfg = st.session_state.plot_cfg[i]
@@ -579,6 +565,9 @@ if uploaded is not None:
                 )
                 continue
 
+            if np.isfinite(matrix).any():
+                any_plot = True
+
             add_plot_trace(
                 fig, i + 1, times, freqs, matrix,
                 low_label, high_label, banded_vc,
@@ -586,11 +575,20 @@ if uploaded is not None:
                 1.02 + (i * 0.02)
             )
 
-        fig.update_layout(height=max(350, 300 * st.session_state.plot_count), margin=dict(l=60, r=250, t=40, b=40))
+        fig.update_layout(
+            height=max(350, 300 * st.session_state.plot_count),
+            margin=dict(l=60, r=250, t=40, b=40)
+        )
+
         if len(master_times) > 0:
             fig.update_xaxes(range=[master_times[0], master_times[-1]])
+
         apply_dynamic_freq_ticks_to_fig(fig, st.session_state.plot_count)
-        st.plotly_chart(fig, use_container_width=True)
+
+        if any_plot:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No plotted data found for the current selections.")
 
         ec1, ec2 = st.columns(2)
         with ec1:
